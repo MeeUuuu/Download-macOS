@@ -1,3 +1,4 @@
+# File: .github/workflows/generate-installer.yml
 name: Generate macOS Installer
 
 on:
@@ -51,9 +52,11 @@ jobs:
       - if: github.event.inputs.file == 'dmg'
         name: Generate macOS DMG Installer
         run: |
-          sudo hdiutil create -o /tmp/'${{ env.installer_name }}' -size 16384m -volname '${{ env.installer_name }}' -layout SPUD -fs HFS+J
+          # 增大磁盘映像至17.5GB并清理空间
+          sudo hdiutil create -o /tmp/'${{ env.installer_name }}' -size 17500m -volname '${{ env.installer_name }}' -layout SPUD -fs HFS+J
           sudo hdiutil attach /tmp/'${{ env.installer_name }}'.dmg -noverify -mountpoint /Volumes/'${{ env.installer_name }}'
-          sleep 10
+          sleep 15
+          # 使用官方工具创建安装介质
           sudo /Applications/'Install macOS ${{ env.installer_name }}'.app/Contents/Resources/createinstallmedia --volume /Volumes/'${{ env.installer_name }}' --nointeraction
           hdiutil eject -force /Volumes/'Install macOS ${{ env.installer_name }}'
           sudo mv /tmp/'${{ env.installer_name }}'.dmg ~/Desktop/'${{ env.installer_name }}'.dmg
@@ -61,12 +64,17 @@ jobs:
       - if: github.event.inputs.file == 'iso'
         name: Generate macOS ISO Installer
         run: |
-          sudo hdiutil create -o /tmp/'${{ env.installer_name }}' -size 16384m -volname '${{ env.installer_name }}' -layout SPUD -fs HFS+J
+          # 增大磁盘映像至18GB
+          sudo hdiutil create -o /tmp/'${{ env.installer_name }}' -size 18000m -volname '${{ env.installer_name }}' -layout SPUD -fs HFS+J
           sudo hdiutil attach /tmp/'${{ env.installer_name }}'.dmg -noverify -mountpoint /Volumes/'${{ env.installer_name }}'
           sleep 20
+          # 使用官方工具并延长等待时间
           sudo /Applications/'Install macOS ${{ env.installer_name }}'.app/Contents/Resources/createinstallmedia --volume /Volumes/'${{ env.installer_name }}' --nointeraction
-          echo "Sleeping 100 to allow the installer to finish"
-          sleep 100
+          echo "等待安装程序完成（最长300秒）..."
+          for i in {1..30}; do
+              sleep 10
+              if ! pgrep -q "createinstallmedia"; then break; fi
+          done
           hdiutil eject -force /Volumes/'Install macOS ${{ env.installer_name }}'
           hdiutil convert /tmp/'${{ env.installer_name }}'.dmg -format UDTO -o ~/Desktop/'${{ env.installer_name }}'
           mv -v ~/Desktop/'${{ env.installer_name }}'.cdr ~/Desktop/'${{ env.installer_name }}'.iso
