@@ -25,8 +25,8 @@ on:
 run-name: Generate macOS Installer - ${{ github.event.inputs.macos_version }} ${{ github.event.inputs.file }}
 
 env:
-  installer_version: "" # Do not touch: Populated by extract-details (suppresses warnings)
-  installer_name: "" # Do not touch: Populated by extract-details (suppresses warnings)
+  installer_version: ""
+  installer_name: ""
 
 jobs:
   build:
@@ -35,7 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # Setup
       - name: Extract Version Details
         id: extract-details
         run: |
@@ -43,39 +42,65 @@ jobs:
           echo "installer_version=${string//*v/}" >> $GITHUB_ENV
           echo "installer_name=${string// v*/}" >> $GITHUB_ENV
 
-      # Download Installer
       - name: Download macOS Installer
         run: |
           softwareupdate --fetch-full-installer --full-installer-version ${{ env.installer_version }}
 
-      # Generate Installer
       - if: github.event.inputs.file == 'dmg'
         name: Generate macOS DMG Installer
         run: |
-          # 增大磁盘映像至17.5GB并清理空间
           sudo hdiutil create -o /tmp/'${{ env.installer_name }}' -size 17500m -volname '${{ env.installer_name }}' -layout SPUD -fs HFS+J
           sudo hdiutil attach /tmp/'${{ env.installer_name }}'.dmg -noverify -mountpoint /Volumes/'${{ env.installer_name }}'
           sleep 15
-          # 使用官方工具创建安装介质
-          sudo /Applications/'Install macOS ${{ env.installer_name }}'.app/Contents/Resources/createinstallmedia --volume /Volumes/'${{ env.installer_name }}' --nointeraction
-          hdiutil eject -force /Volumes/'Install macOS ${{ env.installer_name }}'
+          sudo /Applications/"Install macOS ${{ env.installer_name }}.app"/Contents/Resources/createinstallmedia --volume /Volumes/'${{ env.installer_name }}' --nointeraction
+          
+          # 强制卸载流程
+          for i in {1..5}; do
+              if hdiutil eject -force /Volumes/"Install macOS ${{ env.installer_name }}"; then
+                  break
+              else
+                  echo "卸载失败，尝试终止残留进程..."
+                  pgrep -f "Install macOS ${{ env.installer_name }}" | xargs sudo kill -9
+                  sleep 5
+              fi
+          done
           sudo mv /tmp/'${{ env.installer_name }}'.dmg ~/Desktop/'${{ env.installer_name }}'.dmg
 
       - if: github.event.inputs.file == 'iso'
         name: Generate macOS ISO Installer
         run: |
-          # 增大磁盘映像至18GB
-          sudo hdiutil create -o /tmp/'${{ env.installer_name }}' -size 18000m -volname '${{ env.installer_name }}' -layout SPUD -fs HFS+J
+          # 修正磁盘映像大小为17.5GB（原图中136GB疑似输入错误）
+          sudo hdiutil create -o /tmp/'${{ env.installer_name }}' -size 17500m -volname '${{ env.installer_name }}' -layout SPUD -fs HFS+J
           sudo hdiutil attach /tmp/'${{ env.installer_name }}'.dmg -noverify -mountpoint /Volumes/'${{ env.installer_name }}'
           sleep 20
-          # 使用官方工具并延长等待时间
-          sudo /Applications/'Install macOS ${{ env.installer_name }}'.app/Contents/Resources/createinstallmedia --volume /Volumes/'${{ env.installer_name }}' --nointeraction
-          echo "等待安装程序完成（最长300秒）..."
-          for i in {1..30}; do
-              sleep 10
-              if ! pgrep -q "createinstallmedia"; then break; fi
+          sudo /Applications/"Install macOS ${{ env.installer_name }}.app"/Contents/Resources/createinstallmedia --volume /Volumes/'${{ env.installer_name }}' --nointeraction
+          
+          # 增强型等待机制
+          echo "等待安装程序完成（最长600秒）..."
+          timeout 600 bash -c "
+              while pgrep -q 'createinstallmedia'; do
+                  sleep 10
+              done
+          " || echo "警告：安装程序超时，继续流程"
+          
+          # 多重卸载尝试
+          for retry in {1..5}; do
+              if hdiutil eject -force /Volumes/"Install macOS ${{ env.installer_name }}"; then
+                  break
+              else
+                  echo "[尝试 $retry/5] 卸载失败，尝试终止占用进程..."
+                  sudo lsof +D /Volumes/"Install macOS ${{ env.installer_name }}" || true
+                  pgrep -f "Install macOS ${{ env.installer_name }}" | xargs sudo kill -9
+                  sleep 10
+              fi
           done
-          hdiutil eject -force /Volumes/'Install macOS ${{ env.installer_name }}'
+          
+          # 确保磁盘已卸载
+          if mount | grep -q "/Volumes/Install macOS ${{ env.installer_name }}"; then
+              echo "错误：无法卸载磁盘！"
+              exit 1
+          fi
+          
           hdiutil convert /tmp/'${{ env.installer_name }}'.dmg -format UDTO -o ~/Desktop/'${{ env.installer_name }}'
           mv -v ~/Desktop/'${{ env.installer_name }}'.cdr ~/Desktop/'${{ env.installer_name }}'.iso
           sudo rm -fv /tmp/'${{ env.installer_name }}'.dmg
@@ -84,10 +109,9 @@ jobs:
         name: Generate macOS ZIP Installer
         run: |
           cd /Applications
-          zip -r 'Install macOS ${{ env.installer_name }}.zip' 'Install macOS ${{ env.installer_name }}.app'
-          mv -v 'Install macOS ${{ env.installer_name }}.zip' ~/Desktop/'${{ env.installer_name }}.zip'
+          zip -r "Install macOS ${{ env.installer_name }}.zip" "Install macOS ${{ env.installer_name }}.app"
+          mv -v "Install macOS ${{ env.installer_name }}.zip" ~/Desktop/'${{ env.installer_name }}.zip'
 
-      # Upload Installer
       - name: Upload ${{ github.event.inputs.file }}
         uses: actions/upload-artifact@v4
         with:
